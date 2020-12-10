@@ -1,3 +1,8 @@
+#ToDo:
+#-Create test cases, make sure passes all of them, document in readMe & report.
+#-Complete detailed comments
+#-Clean up code a little
+#-Crash-Recovery functionality
 defmodule Paxos do
 
  def start(name, processes, upper_layer) do
@@ -37,8 +42,6 @@ def init(name, processes, upper_layer) do
             currentBallot: -1,
             a_ballot: -1,
             a_Value: nil,
-            # delivered: (for _ <- 1..length(processes), do: false),
-            # broadcast: false
         }
         # start_failure_detector(Map.keys(pid_to_rank))
         run(state)
@@ -54,19 +57,17 @@ def init(name, processes, upper_layer) do
             #     %{state | detected_ranks: MapSet.put(state.detected_ranks, 
             #         state.pid_to_rank[pid])}
 
+            #Messages sent by eventual leader detector indicating who the leader is.
             {:trust, p} -> 
                 IO.puts("#{inspect state.name}: trust #{inspect p}")
                 send(self(), {:internal_event})
                 %{state |leader: p}
-            {:decide, v} ->
-                state = if state.status != "delivered" do
-                IO.puts("#{state.name}: UC delivers message #{inspect v}")
-                # send(state.upper_layer)
-                %{state| status: "delivered"}
-                else
-                state
-                end
-                state
+            #UC propose indication from the upper layer.
+            {:propose, val} ->
+                IO.puts("#{inspect state.name}: proposes #{inspect val}")
+                send(self(), {:internal_event})
+                %{state | proposal: val}
+            #Handling message received by acceptors from the leader during prepare phase
             {:prepare, b, p} ->
                 state = if b > state.currentBallot do
                 send(p, {:prepared, b, state.a_ballot, state.a_Value, self()})
@@ -78,6 +79,7 @@ def init(name, processes, upper_layer) do
                 state
                 end
                 state
+            #Handling message revieved by leader from acceptors indicating they are prepared.
             {:prepared, b, aB,aV,p} ->
                 state = if b == state.myBallot and state.status == "preparing" do
                 send(self(), {:internal_event})
@@ -86,6 +88,7 @@ def init(name, processes, upper_layer) do
                 state
                 end
                 state
+            #Message sent by leader to acceptors when the number of prepared nodes is a majority
             {:accept, b,v, p} ->
                 state = if b >= state.currentBallot and b >state.a_ballot do
                 send(p,{:accepted, b, self()})
@@ -95,6 +98,7 @@ def init(name, processes, upper_layer) do
                 state
                 end
                 state
+            #Message received by leader from acceptor when they accept proposal.
             {:accepted, b, p} ->
                 if state.status == "polling" and b == state.myBallot do
                 send(self(), {:internal_event})
@@ -102,6 +106,17 @@ def init(name, processes, upper_layer) do
                 else
                 state
                 end
+            #Message received acceptors from leader instructing them to deliver the accepted proposal
+            {:decide, v} ->
+                state = if state.status != "delivered" do
+                IO.puts("#{state.name}: UC delivers message #{inspect v}")
+                send(state.upper_layer, {:decide, v})
+                %{state| status: "delivered"}
+                else
+                state
+                end
+                state
+            #In the case that a nack is sent to leader from acceptors during either phase, start a new round of abortable consensus.
             {:nack, b} ->
                 if b == state.myBallot and (state.status == "polling" or state.status == "preparing")  do
                 %{state| status: "waiting", votes: %MapSet{}, previousVotes: %MapSet{}}
@@ -110,64 +125,25 @@ def init(name, processes, upper_layer) do
                 end
                 state
 
-            # {:decided, v, p} ->
-            #     IO.puts("#{inspect state.name}: decided received #{inspect v}")
-            #     r = state.rank[p]
-            #     {proposal, proposer} = if r < state.my_rank and r > state.proposer, 
-            #         do: {v, r}, else: {state.proposal, state.proposer}
-            #     delivered = List.replace_at(state.delivered, r, true)
-            #     send(self(), {:internal_event})
-            #     %{state | proposal: proposal, proposer: proposer, delivered: delivered}
-
-            {:propose, val} ->
-                IO.puts("#{inspect state.name}: proposes #{inspect val}")
-                send(self(), {:internal_event})
-                %{state | proposal: val}
-
             {:internal_event} ->
                 check_internal_events(state)
         end
         run(state)
     end
 
+    #Handles any internal events carried out by the leader.
     def check_internal_events(state) do
-
-        # if state.name == :p1 do
-        #     IO.puts(inspect(state))
-        # end
-
-        # state = if state.round == state.my_rank and state.proposal != nil and not state.broadcast do
-        #     IO.puts("#{inspect state.name}: coordinator of round #{inspect state.round}, proposal=#{inspect state.proposal}")
-        #     state = %{state | broadcast: true}
-        #     # if state.name == :p0, do: Process.exit(self(), :kill)
-        #     beb_broadcast({:decided, state.proposal, state.name}, state.processes)
-        #     send(self(), {:decide, state.proposal})
-        #     send(self(), {:internal_event})
-        #     state
-        # else
-        #     state
-        # end
-
-        # state = if (state.round in state.detected_ranks) or Enum.at(state.delivered, state.round) do
-        #     IO.puts("#{inspect state.name}: advance to round #{inspect state.round + 1}")
-        #     send(self(), {:internal_event})
-        #     %{state | round: state.round + 1}
-        # else
-        #     state
-        # end
-        state = if MapSet.size(state.votes) > (state.gap/2) and state.status == "polling" do
-        beb_broadcast({:decide, state.value}, state.processes)
-        state
-        else
-        state
-        end
-
+        #When node is leader, has a proposal ready and has not delivered: begin prepare phase
         state = if to_string(state.name) == to_string(state.leader) and state.proposal != nil and state.status == "waiting" do
+            #Creating a unique, incrementing ballot number based on the number of processes in system and the processes unique rank number.
             beb_broadcast({:prepare, (state.myBallot + state.gap), self()}, state.processes)
             %{state|status: "preparing", myBallot: (state.myBallot + state.gap)}
             else
             state
             end
+        #Upon a quorum of prepared acceptors,
+        #if there exists a value already accepted by quorum, take this value (from the vote with highest ballot number that is not nil)
+        #Otherwise, use own proposal for accept phase.
         state = if MapSet.size(state.previousVotes) > (state.gap/2) and state.status == "preparing" do
             IO.puts("#{inspect state.name}:  Received Quorum of votes for ballot number #{state.myBallot}")
             temp = List.last(Enum.filter(Enum.sort(state.previousVotes), fn([_,v,_]) -> v != nil end))
@@ -182,7 +158,14 @@ def init(name, processes, upper_layer) do
             else
             state
             end
-        state
+        #Upon a quorum of accepted votes, decide on the value from this ballot.
+        state = if MapSet.size(state.votes) > (state.gap/2) and state.status == "polling" do
+            beb_broadcast({:decide, state.value}, state.processes)
+            state
+            else
+            state
+            end
+            state
     end
     # Send message m point-to-point to process p
     defp unicast(m, p) do
@@ -191,5 +174,6 @@ def init(name, processes, upper_layer) do
                 :undefined -> :ok
         end
     end
+    # Implementation of Best Effort Broadcast - iterate through all processes and pl send the message.
     defp beb_broadcast(m, dest), do: for p <- dest, do: unicast(m, p)
 end
