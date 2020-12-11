@@ -71,7 +71,7 @@ def init(name, processes, upper_layer) do
             {:prepare, b, p} ->
                 state = if b > state.currentBallot do
                 send(p, {:prepared, b, state.a_ballot, state.a_Value, self()})
-                IO.puts("Preparing for ballot #{inspect b}")
+                IO.puts("Prepared for ballot #{inspect b}")
                 %{state| currentBallot: b}
                 else
                 IO.puts("Rejected ballot #{inspect b}")
@@ -118,7 +118,9 @@ def init(name, processes, upper_layer) do
                 state
             #In the case that a nack is sent to leader from acceptors during either phase, start a new round of abortable consensus.
             {:nack, b} ->
-                if b == state.myBallot and (state.status == "polling" or state.status == "preparing")  do
+                state = if b == state.myBallot and (state.status == "polling" or state.status == "preparing")  do
+                IO.puts("Received a nack for ballot ##{inspect b}, current status: #{state.status}")
+                send(self(), {:internal_event})
                 %{state| status: "waiting", votes: %MapSet{}, previousVotes: %MapSet{}}
                 else
                 state
