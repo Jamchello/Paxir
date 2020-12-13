@@ -2,7 +2,7 @@
 #-Create test cases, make sure passes all of them, document in readMe & report.
 #-Complete detailed comments
 #-Clean up code a little
-#-Crash-Recovery functionality
+#-Check with Prof Chockler if naming convention is okay.
 defmodule Paxos do
 
  def start(name, processes, upper_layer) do
@@ -21,15 +21,18 @@ def init(name, processes, upper_layer) do
         Process.sleep(10)
         rank = for {p, r} <- Enum.zip(processes, 0..(length(processes) - 1)), 
                     into: %{}, do: {p, r}
-        pid_to_rank = for p <- processes, into: %{}, do: {:global.whereis_name(p), rank[p]}
-
-        state = %{ 
+        state = if File.exists?("#{to_string(name)}.txt") == true do
+        IO.puts("#{name} has been recovered.")
+        beb_broadcast({:restored,name}, processes)
+        read(name)
+        else
+        File.write("#{to_string(name)}.txt",:erlang.term_to_binary(%{}))
+        %{ 
             name: name, 
             processes: processes,
             upper_layer: upper_layer,
             rank: rank,
             my_rank: rank[name],
-            pid_to_rank: pid_to_rank,
 
             value: nil,
             proposal: nil,
@@ -43,21 +46,14 @@ def init(name, processes, upper_layer) do
             a_ballot: -1,
             a_Value: nil,
         }
-        # start_failure_detector(Map.keys(pid_to_rank))
+        end
+        save(name, state)
         run(state)
     end
 
  def run(state) do
         
         state = receive do
-
-            # {:DOWN, _, :process, pid, _} ->
-            #     IO.puts("#{inspect state.name}: rank #{inspect state.pid_to_rank[pid]} detected")
-            #     send(self(), {:internal_event})
-            #     %{state | detected_ranks: MapSet.put(state.detected_ranks, 
-            #         state.pid_to_rank[pid])}
-
-            #Messages sent by eventual leader detector indicating who the leader is.
             {:trust, p} -> 
                 IO.puts("#{inspect state.name}: trust #{inspect p}")
                 send(self(), {:internal_event})
@@ -70,7 +66,7 @@ def init(name, processes, upper_layer) do
             #Handling message received by acceptors from the leader during prepare phase
             {:prepare, b, p} ->
                 state = if b > state.currentBallot do
-                send(p, {:prepared, b, state.a_ballot, state.a_Value, self()})
+                send(p, {:prepared, b, state.a_ballot, state.a_Value, state.name})
                 IO.puts("Prepared for ballot #{inspect b}")
                 %{state| currentBallot: b}
                 else
@@ -91,7 +87,7 @@ def init(name, processes, upper_layer) do
             #Message sent by leader to acceptors when the number of prepared nodes is a majority
             {:accept, b,v, p} ->
                 state = if b >= state.currentBallot and b >state.a_ballot do
-                send(p,{:accepted, b, self()})
+                send(p,{:accepted, b, state.name})
                 %{state|currentBallot: b, a_ballot: b, a_Value: v}
                 else
                 send(p, {:nack, b})
@@ -126,10 +122,28 @@ def init(name, processes, upper_layer) do
                 state
                 end
                 state
-
+            {:restored, p} ->
+                state = cond do
+                state.status == "waiting" ->
+                    state
+                state.status == "preparing" and not MapSet.member?(state.previousVotes,p) ->
+                    send(:global.whereis_name(p),{:prepare, state.myBallot, self()})
+                    state
+                state.status == "polling" and not MapSet.member?(state.votes,p) ->
+                    send(:global.whereis_name(p),{:accept, state.myBallot, state.value, self()})
+                    state
+                state.status == "delivered" ->
+                    send(:global.whereis_name(p),{:decide, state.value})
+                    state
+                end
+                state
+            # if state.status == "preparing" and MapSet.member?(state.previousVotes,p_name) do
+            # send(p,{:prepare, state.myBallot})
+            # else if 
             {:internal_event} ->
                 check_internal_events(state)
         end
+        save(state.name, state)
         run(state)
     end
 
@@ -146,7 +160,7 @@ def init(name, processes, upper_layer) do
         #Upon a quorum of prepared acceptors,
         #if there exists a value already accepted by quorum, take this value (from the vote with highest ballot number that is not nil)
         #Otherwise, use own proposal for accept phase.
-        state = if MapSet.size(state.previousVotes) > (state.gap/2) and state.status == "preparing" do
+        state = if MapSet.size(state.previousVotes) > (state.gap/2) and state.status == "preparing" and to_string(state.name) == to_string(state.leader)do
             IO.puts("#{inspect state.name}:  Received Quorum of votes for ballot number #{state.myBallot}")
             temp = List.last(Enum.filter(Enum.sort(state.previousVotes), fn([_,v,_]) -> v != nil end))
             [_, val,_] = if temp == nil do
@@ -161,7 +175,7 @@ def init(name, processes, upper_layer) do
             state
             end
         #Upon a quorum of accepted votes, decide on the value from this ballot.
-        state = if MapSet.size(state.votes) > (state.gap/2) and state.status == "polling" do
+        state = if MapSet.size(state.votes) > (state.gap/2) and state.status == "polling" and to_string(state.name) == to_string(state.leader) do
             beb_broadcast({:decide, state.value}, state.processes)
             state
             else
@@ -178,4 +192,16 @@ def init(name, processes, upper_layer) do
     end
     # Implementation of Best Effort Broadcast - iterate through all processes and pl send the message.
     defp beb_broadcast(m, dest), do: for p <- dest, do: unicast(m, p)
+
+    defp save(proc, state) do
+    {:ok, peristant_state} = File.read("states.txt")
+    peristant_state = :erlang.binary_to_term(peristant_state)
+    {:ok, file} = File.open("#{to_string(proc)}.txt", [:write])
+    IO.binwrite(file, :erlang.term_to_binary(Map.put(peristant_state, proc,state)) )
+    end
+
+    defp read(proc) do
+    {:ok, peristant_state} = File.read("#{to_string(proc)}.txt")
+    Map.get(:erlang.binary_to_term(peristant_state), proc)
+    end
 end
