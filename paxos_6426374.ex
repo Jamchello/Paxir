@@ -1,8 +1,3 @@
-#ToDo:
-#-Create test cases, make sure passes all of them, document in readMe & report.
-#-Complete detailed comments
-#-Clean up code a little
-#-Check with Prof Chockler if naming convention is okay.
 defmodule Paxos do
 
  def start(name, processes, upper_layer) do
@@ -21,12 +16,16 @@ def init(name, processes, upper_layer) do
         Process.sleep(10)
         rank = for {p, r} <- Enum.zip(processes, 0..(length(processes) - 1)), 
                     into: %{}, do: {p, r}
-        state = if File.exists?("#{to_string(name)}.txt") == true do
+        #If the state file exists, it means this process has a state which can be recovered.
+        state = if File.exists?("./states/#{to_string(name)}.txt") == true do
         IO.puts("#{name} has been recovered.")
+        #Broadcast a recovered message
         beb_broadcast({:restored,name}, processes)
+        #Read state in from text file.
         read(name)
         else
-        File.write("#{to_string(name)}.txt",:erlang.term_to_binary(%{}))
+        #If no saved state exists, Init a new state.
+        File.write("./states/#{to_string(name)}.txt",:erlang.term_to_binary(%{}))
         %{ 
             name: name, 
             processes: processes,
@@ -47,6 +46,7 @@ def init(name, processes, upper_layer) do
             a_Value: nil,
         }
         end
+        #Ensure that the new state is saved to disk
         save(name, state)
         run(state)
     end
@@ -54,6 +54,7 @@ def init(name, processes, upper_layer) do
  def run(state) do
         
         state = receive do
+            #Trust message from eventual leader detector
             {:trust, p} -> 
                 IO.puts("#{inspect state.name}: trust #{inspect p}")
                 send(self(), {:internal_event})
@@ -122,8 +123,12 @@ def init(name, processes, upper_layer) do
                 state
                 end
                 state
+            #When a crashed process comes back online it will broadcast the restored message, handling that message:
             {:restored, p} ->
                 state = cond do
+                to_string(p) == to_string(state.name) and to_string(p) == to_string(state.leader)  ->
+                    %{state | status: "waiting"}
+                #Cases where the restored process is not the leader:
                 state.status == "waiting" ->
                     state
                 state.status == "preparing" and not MapSet.member?(state.previousVotes,p) ->
@@ -192,16 +197,14 @@ def init(name, processes, upper_layer) do
     end
     # Implementation of Best Effort Broadcast - iterate through all processes and pl send the message.
     defp beb_broadcast(m, dest), do: for p <- dest, do: unicast(m, p)
-
+    #Function to persist the state of a process to disk.
     defp save(proc, state) do
-    {:ok, peristant_state} = File.read("states.txt")
-    peristant_state = :erlang.binary_to_term(peristant_state)
-    {:ok, file} = File.open("#{to_string(proc)}.txt", [:write])
-    IO.binwrite(file, :erlang.term_to_binary(Map.put(peristant_state, proc,state)) )
+    {:ok, file} = File.open("./states/#{to_string(proc)}.txt", [:write])
+    IO.binwrite(file, :erlang.term_to_binary(Map.put(%{}, proc,state)))
     end
-
+    #Reading in persisted state from disk
     defp read(proc) do
-    {:ok, peristant_state} = File.read("#{to_string(proc)}.txt")
-    Map.get(:erlang.binary_to_term(peristant_state), proc)
+    {:ok, persistant_state} = File.read("./states/#{to_string(proc)}.txt")
+    Map.get(:erlang.binary_to_term(persistant_state), proc)
     end
 end
