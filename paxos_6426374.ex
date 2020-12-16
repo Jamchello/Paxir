@@ -68,7 +68,7 @@ def init(name, processes, upper_layer) do
             {:prepare, b, p} ->
                 state = if b > state.currentBallot do
                 send(p, {:prepared, b, state.a_ballot, state.a_Value, state.name})
-                IO.puts("Prepared for ballot #{inspect b}")
+                # IO.puts("Prepared for ballot #{inspect b}")
                 %{state| currentBallot: b}
                 else
                 IO.puts("Rejected ballot #{inspect b}")
@@ -106,7 +106,7 @@ def init(name, processes, upper_layer) do
             #Message received acceptors from leader instructing them to deliver the accepted proposal
             {:decide, v} ->
                 state = if state.status != "delivered" do
-                IO.puts("#{state.name}: UC delivers message #{inspect v}")
+                IO.puts("#{state.name}: UC decides message #{inspect v}")
                 send(state.upper_layer, {:decide, v})
                 %{state| status: "delivered"}
                 else
@@ -126,7 +126,11 @@ def init(name, processes, upper_layer) do
             #When a crashed process comes back online it will broadcast the restored message, handling that message:
             {:restored, p} ->
                 state = cond do
+                to_string(state.name) == to_string(state.leader) and state.status == "delivered" ->
+                    send(:global.whereis_name(p),{:decide, state.value})
+                    state
                 to_string(p) == to_string(state.name) and to_string(p) == to_string(state.leader)  ->
+                    send(self(), {:internal_event})
                     %{state | status: "waiting"}
                 #Cases where the restored process is not the leader:
                 state.status == "waiting" ->
@@ -137,8 +141,7 @@ def init(name, processes, upper_layer) do
                 state.status == "polling" and not MapSet.member?(state.votes,p) ->
                     send(:global.whereis_name(p),{:accept, state.myBallot, state.value, self()})
                     state
-                state.status == "delivered" ->
-                    send(:global.whereis_name(p),{:decide, state.value})
+                true ->
                     state
                 end
                 state
@@ -166,7 +169,7 @@ def init(name, processes, upper_layer) do
         #if there exists a value already accepted by quorum, take this value (from the vote with highest ballot number that is not nil)
         #Otherwise, use own proposal for accept phase.
         state = if MapSet.size(state.previousVotes) > (state.gap/2) and state.status == "preparing" and to_string(state.name) == to_string(state.leader)do
-            IO.puts("#{inspect state.name}:  Received Quorum of votes for ballot number #{state.myBallot}")
+            IO.puts("#{inspect state.name}:  Received Quorum of prepared votes for ballot number #{state.myBallot}")
             temp = List.last(Enum.filter(Enum.sort(state.previousVotes), fn([_,v,_]) -> v != nil end))
             [_, val,_] = if temp == nil do
             [nil,state.proposal, nil]
@@ -174,7 +177,6 @@ def init(name, processes, upper_layer) do
             temp
             end
             beb_broadcast({:accept, state.myBallot, val , self()}, state.processes)
-            IO.puts("#{state.name}: polling for value #{inspect val}")
             %{state| status: "polling", votes: %MapSet{}, value: val}
             else
             state
