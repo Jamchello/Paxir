@@ -8,9 +8,10 @@
 > Once the module has been compiled in Iex you must create an upper layer process (which will be sent the DECIDE events from processes within the system once a decision has been reached) and a list of process names must also be defined in an array.
 ` pids = pids = Enum.map(procs, fn(p) -> Paxos.start(p, procs, upper_layer) end)
 > Processes can be sent trust events manually through Iex to simulate the eventual leader detector:
-` send(:global.whereis_name(:name_to_receive), {:trust, :name_to_trust})
+`send(:global.whereis_name(:name_to_receive), {:trust, :name_to_trust})`
 > Proposals can be made by a process by sending them the following in Iex:
-` send(:global.whereis_name(:name_to_receive), {:trust, :value_to_propose})
+
+` send(:global.whereis_name(:name_to_receive), {:trust, :value_to_propose})`
 
 > Once a process has been trusted as a leader and has a proposal, abortable consensus begins and up to a minority of crashes can be tolerated. Processes which crash can be "recovered" by starting a new process with the exact same name. When a process is initialised it will check disc memory for a persisted version of the state and recover from file if it exists.
 
