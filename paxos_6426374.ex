@@ -1,6 +1,8 @@
 defmodule Paxos do
 
  def start(name, processes, upper_layer) do
+        # Create the states directory which holds all persistant state.
+        File.mkdir("./states")
         pid = spawn(Paxos, :init, [name, processes, upper_layer])
         # :global.unregister_name(name)
         case :global.re_register_name(name, pid) do
@@ -161,7 +163,7 @@ def init(name, processes, upper_layer) do
         state = if to_string(state.name) == to_string(state.leader) and state.proposal != nil and state.status == "waiting" do
             #Creating a unique, incrementing ballot number based on the number of processes in system and the processes unique rank number.
             beb_broadcast({:prepare, (state.myBallot + state.gap), self()}, state.processes)
-            %{state|status: "preparing", myBallot: (state.myBallot + state.gap)}
+            %{state|status: "preparing", myBallot: (state.myBallot + state.gap), previousVotes: %MapSet{}}
             else
             state
             end
